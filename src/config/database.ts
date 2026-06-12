@@ -1,12 +1,17 @@
 import { Pool, PoolClient } from 'pg';
 
+// Fail fast in production rather than silently falling back to a weak default password.
+if (process.env.NODE_ENV === 'production' && !process.env.DB_PASSWORD) {
+  throw new Error('FATAL: DB_PASSWORD environment variable must be set in production');
+}
+
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432'),
   database: process.env.DB_NAME || 'savisanju',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'password',
-  max: 20, // Maximum number of clients in the pool
+  max: parseInt(process.env.DB_POOL_MAX || '10'), // Keep modest for a 1 vCPU / 2 GB server
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
 });

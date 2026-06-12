@@ -25,9 +25,21 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const filename = `${uuidv4()}${ext}`;
-    cb(null, filename);
+    // Derive the extension from the validated MIME type, never from the
+    // user-supplied filename (which could carry .svg/.html/.php and become
+    // stored XSS / RCE if the upload directory is ever served).
+    const MIME_EXT: Record<string, string> = {
+      'image/jpeg': '.jpg',
+      'image/jpg': '.jpg',
+      'image/png': '.png',
+      'image/webp': '.webp'
+    };
+    const ext = MIME_EXT[file.mimetype];
+    if (!ext) {
+      cb(new Error('Unsupported file type'), '');
+      return;
+    }
+    cb(null, `${uuidv4()}${ext}`);
   }
 });
 

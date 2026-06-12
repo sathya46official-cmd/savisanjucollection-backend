@@ -23,11 +23,11 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 /**
  * Send email verification link to user
  * @param email - User's email address
- * @param userId - User's UUID
+ * @param token - Cryptographically-random, single-use verification token
  */
-export async function sendVerificationEmail(email: string, userId: string): Promise<void> {
+export async function sendVerificationEmail(email: string, token: string): Promise<void> {
   try {
-    const verificationUrl = `${APP_URL}/api/auth/verify-email?token=${userId}`;
+    const verificationUrl = `${APP_URL}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
 
     await getResendClient().emails.send({
       from: FROM_EMAIL,

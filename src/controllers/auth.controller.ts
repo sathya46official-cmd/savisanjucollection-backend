@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { randomBytes } from 'crypto';
 import { registerSchema, loginSchema } from '../utils/validation';
 import { hashPassword, verifyPassword } from '../utils/password';
 import { signToken, generateAuthCookie } from '../utils/jwt';
@@ -29,6 +30,9 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     // Hash password with bcrypt
     const passwordHash = await hashPassword(validated.password);
 
+    // Cryptographically-random, single-use email verification token (NOT the user id).
+    const verificationToken = randomBytes(32).toString('hex');
+
     let userId: string = '';
 
     // Create user profile and auth record in transaction
@@ -49,10 +53,17 @@ export const register = async (req: Request, res: Response): Promise<void> => {
          VALUES ($1, $2)`,
         [userId, passwordHash]
       );
+
+      // Store the verification token with a 24h expiry (random token, not the user id)
+      await client.query(
+        `INSERT INTO email_verification_tokens (user_id, token, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
+        [userId, verificationToken]
+      );
     });
 
-    // Send verification email
-    await sendVerificationEmail(validated.email, userId!);
+    // Send verification email with the random token
+    await sendVerificationEmail(validated.email, verificationToken);
 
     res.status(201).json({
       message: 'Registration successful. Please check your email to verify your account.'
