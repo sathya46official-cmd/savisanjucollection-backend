@@ -27,7 +27,7 @@
 -- ============================================
 -- SAFETY CHECK: Verify critical tables exist
 -- ============================================
-DO $
+DO $$
 BEGIN
   -- Check if critical tables exist
   IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
@@ -37,7 +37,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'products') THEN
     RAISE EXCEPTION 'Migration 001_initial_schema.sql must be applied first. Table products does not exist.';
   END IF;
-END $;
+END $$;
 
 -- ============================================
 -- ADDITIONAL INDEXES FOR PERFORMANCE
@@ -50,8 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_user_profiles_email_verified ON user_profiles(ema
 -- Index for product variant stock queries (out of stock, low stock alerts)
 CREATE INDEX IF NOT EXISTS idx_product_variants_quantity_product ON product_variants(product_id, quantity);
 
--- Index for cart items by variant (stock validation during checkout)
-CREATE INDEX IF NOT EXISTS idx_cart_items_variant_quantity ON cart_items(variant_id, quantity);
+-- Index for cart items by variant is defined in migration 006 (where cart_items lives)
 
 -- Index for pending stock notifications (batch notification processing)
 CREATE INDEX IF NOT EXISTS idx_stock_notifications_pending ON stock_notifications(variant_id, notified_at) WHERE notified_at IS NULL;
@@ -67,7 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_user_created ON orders(user_id, created_at
 -- ============================================
 
 -- Ensure product variant quantity is never negative
-DO $
+DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.constraint_column_usage 
@@ -76,10 +75,10 @@ BEGIN
     ALTER TABLE product_variants 
     ADD CONSTRAINT product_variants_quantity_check CHECK (quantity >= 0);
   END IF;
-END $;
+END $$;
 
 -- Ensure order quantity is positive
-DO $
+DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.constraint_column_usage 
@@ -88,10 +87,10 @@ BEGIN
     ALTER TABLE orders 
     ADD CONSTRAINT orders_quantity_check CHECK (quantity > 0);
   END IF;
-END $;
+END $$;
 
 -- Ensure confirmed_price is positive when set
-DO $
+DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.constraint_column_usage 
@@ -100,7 +99,7 @@ BEGIN
     ALTER TABLE orders 
     ADD CONSTRAINT orders_confirmed_price_check CHECK (confirmed_price IS NULL OR confirmed_price > 0);
   END IF;
-END $;
+END $$;
 
 -- ============================================
 -- BUSINESS LOGIC FUNCTIONS
@@ -111,7 +110,7 @@ END $;
 CREATE OR REPLACE FUNCTION reserve_stock(
   p_variant_id UUID,
   p_quantity INTEGER
-) RETURNS BOOLEAN AS $
+) RETURNS BOOLEAN AS $$
 DECLARE
   v_current_stock INTEGER;
 BEGIN
@@ -138,20 +137,20 @@ BEGIN
   
   RETURN TRUE; -- Stock reserved successfully
 END;
-$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 -- Function to restore stock when order is cancelled
 CREATE OR REPLACE FUNCTION restore_stock(
   p_variant_id UUID,
   p_quantity INTEGER
-) RETURNS VOID AS $
+) RETURNS VOID AS $$
 BEGIN
   UPDATE product_variants
   SET quantity = quantity + p_quantity,
       updated_at = NOW()
   WHERE id = p_variant_id;
 END;
-$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 -- Function to get low stock variants (quantity <= 2)
 CREATE OR REPLACE FUNCTION get_low_stock_variants()
@@ -162,7 +161,7 @@ RETURNS TABLE(
   color VARCHAR(100),
   size VARCHAR(50),
   quantity INTEGER
-) AS $
+) AS $$
 BEGIN
   RETURN QUERY
   SELECT 
@@ -177,7 +176,7 @@ BEGIN
   WHERE pv.quantity > 0 AND pv.quantity <= 2
   ORDER BY pv.quantity ASC, p.name ASC;
 END;
-$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 -- Function to notify users when stock becomes available
 CREATE OR REPLACE FUNCTION notify_stock_available(
@@ -186,7 +185,7 @@ CREATE OR REPLACE FUNCTION notify_stock_available(
   notification_id UUID,
   email TEXT,
   user_id UUID
-) AS $
+) AS $$
 BEGIN
   RETURN QUERY
   SELECT 
@@ -203,7 +202,7 @@ BEGIN
   WHERE variant_id = p_variant_id
     AND notified_at IS NULL;
 END;
-$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 -- ============================================
 -- TRIGGERS FOR BUSINESS LOGIC
@@ -211,14 +210,14 @@ $ LANGUAGE plpgsql;
 
 -- Trigger to prevent order cancellation after shipping
 CREATE OR REPLACE FUNCTION prevent_cancellation_after_shipping()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $$
 BEGIN
   IF OLD.status IN ('shipped', 'delivered') AND NEW.status = 'cancelled' THEN
     RAISE EXCEPTION 'Cannot cancel order after it has been shipped or delivered';
   END IF;
   RETURN NEW;
 END;
-$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS check_order_cancellation ON orders;
 CREATE TRIGGER check_order_cancellation
@@ -229,14 +228,14 @@ CREATE TRIGGER check_order_cancellation
 
 -- Trigger to restore stock when order is cancelled
 CREATE OR REPLACE FUNCTION restore_stock_on_cancellation()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.status = 'cancelled' AND OLD.status != 'cancelled' THEN
     PERFORM restore_stock(NEW.variant_id, NEW.quantity);
   END IF;
   RETURN NEW;
 END;
-$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS restore_stock_trigger ON orders;
 CREATE TRIGGER restore_stock_trigger
@@ -344,98 +343,21 @@ COMMENT ON VIEW customer_order_history IS 'Customer-facing order history with pr
 COMMENT ON VIEW product_stock_status IS 'Product inventory status with stock level indicators';
 
 -- ============================================
--- ROW LEVEL SECURITY (RLS) POLICIES
+-- ROW LEVEL SECURITY (RLS)
 -- ============================================
-
--- Enable RLS on tables that need user-level access control
-ALTER TABLE cart ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cart_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stock_notifications ENABLE ROW LEVEL SECURITY;
-
--- ============================================
--- CART POLICIES
--- ============================================
--- Users can only view/insert/update their own cart
-
--- Policy: Users can view their own cart
-CREATE POLICY "Users can view their own cart"
-  ON cart FOR SELECT
-  USING (auth.uid() = user_id);
-
--- Policy: Users can insert their own cart
-CREATE POLICY "Users can insert their own cart"
-  ON cart FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
-
--- Policy: Users can update their own cart
-CREATE POLICY "Users can update their own cart"
-  ON cart FOR UPDATE
-  USING (auth.uid() = user_id);
-
--- ============================================
--- CART ITEMS POLICIES
--- ============================================
--- Users can only manage items in their own cart
-
--- Policy: Users can view their own cart items
-CREATE POLICY "Users can view their own cart items"
-  ON cart_items FOR SELECT
-  USING (cart_id IN (SELECT id FROM cart WHERE user_id = auth.uid()));
-
--- Policy: Users can insert their own cart items
-CREATE POLICY "Users can insert their own cart items"
-  ON cart_items FOR INSERT
-  WITH CHECK (cart_id IN (SELECT id FROM cart WHERE user_id = auth.uid()));
-
--- Policy: Users can update their own cart items
-CREATE POLICY "Users can update their own cart items"
-  ON cart_items FOR UPDATE
-  USING (cart_id IN (SELECT id FROM cart WHERE user_id = auth.uid()));
-
--- Policy: Users can delete their own cart items
-CREATE POLICY "Users can delete their own cart items"
-  ON cart_items FOR DELETE
-  USING (cart_id IN (SELECT id FROM cart WHERE user_id = auth.uid()));
-
--- ============================================
--- STOCK NOTIFICATIONS POLICIES
--- ============================================
--- Users can view their own notifications, anyone can insert
-
--- Policy: Users can view their own notifications
-CREATE POLICY "Users can view their own notifications"
-  ON stock_notifications FOR SELECT
-  USING (auth.uid() = user_id OR user_id IS NULL);
-
--- Policy: Anyone can insert stock notifications
-CREATE POLICY "Anyone can insert stock notifications"
-  ON stock_notifications FOR INSERT
-  WITH CHECK (true);
-
--- ============================================
--- RLS POLICY COMMENTS
--- ============================================
-
-COMMENT ON POLICY "Users can view their own cart" ON cart IS 'Ensures users can only view their own shopping cart';
-COMMENT ON POLICY "Users can insert their own cart" ON cart IS 'Ensures users can only create their own shopping cart';
-COMMENT ON POLICY "Users can update their own cart" ON cart IS 'Ensures users can only update their own shopping cart';
-
-COMMENT ON POLICY "Users can view their own cart items" ON cart_items IS 'Ensures users can only view items in their own cart';
-COMMENT ON POLICY "Users can insert their own cart items" ON cart_items IS 'Ensures users can only add items to their own cart';
-COMMENT ON POLICY "Users can update their own cart items" ON cart_items IS 'Ensures users can only update items in their own cart';
-COMMENT ON POLICY "Users can delete their own cart items" ON cart_items IS 'Ensures users can only delete items from their own cart';
-
-COMMENT ON POLICY "Users can view their own notifications" ON stock_notifications IS 'Allows users to view their own stock notifications, including guest notifications (user_id IS NULL)';
-COMMENT ON POLICY "Anyone can insert stock notifications" ON stock_notifications IS 'Allows anyone to request stock notifications, including guests';
+-- RLS is defined in migration 009_fix_row_level_security.sql using portable,
+-- self-hosted PostgreSQL primitives (session GUCs via current_setting()).
+-- The previous Supabase-specific `auth.uid()` policies were removed because this
+-- project targets a self-hosted PostgreSQL instance (Docker), not Supabase.
 
 -- ============================================
 -- MIGRATION COMPLETE
 -- ============================================
 
 -- Log migration completion
-DO $
+DO $$
 BEGIN
   RAISE NOTICE 'Migration 002_security_architecture_overhaul.sql completed successfully';
-  RAISE NOTICE 'Added: Performance indexes, business logic functions, triggers, views, and RLS policies';
-  RAISE NOTICE 'All changes are backward compatible with existing data';
-END $;
+  RAISE NOTICE 'Added: Performance indexes, business logic functions, triggers, and views';
+  RAISE NOTICE 'RLS is configured separately in migration 009 (self-hosted PostgreSQL)';
+END $$;
