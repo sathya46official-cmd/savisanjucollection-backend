@@ -93,7 +93,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     // Find user by email
     const userResult = await query(
-      `SELECT up.id, up.email, up.name, ua.password_hash
+      `SELECT up.id, up.email, up.name, up.role, ua.password_hash
        FROM user_profiles up
        INNER JOIN user_auth ua ON up.id = ua.user_id
        WHERE up.email = $1`,
@@ -116,11 +116,12 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Generate JWT token
+    // Generate JWT token. Role is derived strictly from the trusted DB column,
+    // never from the request or an email comparison.
     const token = signToken({
       userId: user.id,
       email: user.email,
-      role: 'user'
+      role: user.role === 'admin' ? 'admin' : 'user'
     });
 
     // Set httpOnly cookie
@@ -217,11 +218,16 @@ export const adminLogin = async (req: Request, res: Response): Promise<void> => 
 
     const user = userResult.rows[0];
 
-    // Check if user has admin role (via env var or DB role column)
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@savisanju.com';
-    const isAdmin = user.email === adminEmail || user.role === 'admin';
+    // Authorization is based ONLY on the trusted `role` column in the database.
+    // We intentionally do NOT grant admin based on a matching email address,
+    // because the admin email is a guessable/configurable value and email-based
+    // checks enabled an admin-account-takeover path.
+    const isAdmin = user.role === 'admin';
     if (!isAdmin) {
-      res.status(403).json({ error: 'Admin access required' });
+      // Verify the password before responding so the error/timing is identical
+      // whether or not the account is an admin (avoids admin-account enumeration).
+      await verifyPassword(validated.password, user.password_hash);
+      res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 

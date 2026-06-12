@@ -200,24 +200,20 @@ CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================
--- INITIAL DATA (Optional)
+-- INITIAL DATA
 -- ============================================
 
--- Insert admin user (password: Admin@123 - CHANGE THIS!)
--- Password hash generated with: bcrypt.hash('Admin@123', 10)
-INSERT INTO user_profiles (id, email, name, email_verified)
-VALUES (
-  '00000000-0000-0000-0000-000000000001',
-  'admin@savisanju.com',
-  'Admin',
-  TRUE
-) ON CONFLICT (email) DO NOTHING;
-
-INSERT INTO user_auth (user_id, password_hash)
-VALUES (
-  '00000000-0000-0000-0000-000000000001',
-  '$2a$10$rKZLvXz8QxVZQ7Y5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z'
-) ON CONFLICT (user_id) DO NOTHING;
+-- NOTE: No admin user is seeded here.
+-- Seeding a hardcoded admin (with a known/placeholder password hash) is a
+-- security risk (hardcoded credentials / admin account takeover).
+-- Create the admin account explicitly and securely instead:
+--
+--   ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='<strong-password>' \
+--     npx tsx scripts/create-admin.ts
+--
+-- The script generates a real bcrypt hash from an environment-provided
+-- password and sets role='admin' (see migration 008). The password is never
+-- stored in source control.
 
 -- ============================================
 -- COMMENTS

@@ -217,22 +217,27 @@ router.post('/:id/variants', authenticate, requireAdmin, async (req: AuthRequest
     const { id } = req.params;
     const { color, size, price, quantity, image_url, is_negotiable, hex_code } = req.body;
 
-    if (!price) {
+    if (price === undefined || price === null) {
       res.status(400).json({ error: 'Price is required' });
+      return;
     }
 
-    // Validate price is positive
-    if (price <= 0) {
-      res.status(400).json({ error: 'Price must be a positive number' });
+    // Price is provided in RUPEES and must be a positive, finite number.
+    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) {
+      res.status(400).json({ error: 'Price must be a positive number (in rupees)' });
+      return;
     }
 
     // Validate hex_code format if provided
     if (hex_code && !/^#[0-9A-Fa-f]{6}$/.test(hex_code)) {
       res.status(400).json({ error: 'Invalid hex code format. Must be #RRGGBB' });
+      return;
     }
 
-    // Convert price from rupees to paise if it's a large number (> 1000)
-    const priceInPaise = price > 1000 ? price : price * 100;
+    // Deterministic conversion: rupees -> paise. The previous `price > 1000`
+    // heuristic mis-stored expensive items at ~1/100th of their value
+    // (massive-discount exploit), so it has been removed.
+    const priceInPaise = Math.round(price * 100);
 
     const result = await pool.query(
       `INSERT INTO product_variants (product_id, color, size, price, quantity, image_url, is_negotiable, hex_code)
@@ -254,13 +259,15 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
     const { color, size, price, quantity, image_url, is_negotiable, hex_code } = req.body;
 
     // Validate price if provided
-    if (price !== undefined && price <= 0) {
-      res.status(400).json({ error: 'Price must be a positive number' });
+    if (price !== undefined && (typeof price !== 'number' || !Number.isFinite(price) || price <= 0)) {
+      res.status(400).json({ error: 'Price must be a positive number (in rupees)' });
+      return;
     }
 
     // Validate hex_code format if provided
     if (hex_code !== undefined && hex_code && !/^#[0-9A-Fa-f]{6}$/.test(hex_code)) {
       res.status(400).json({ error: 'Invalid hex code format. Must be #RRGGBB' });
+      return;
     }
 
     // Build dynamic update query
@@ -277,7 +284,8 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
       values.push(size);
     }
     if (price !== undefined) {
-      const priceInPaise = price > 1000 ? price : price * 100;
+      // Deterministic rupees -> paise conversion (no ambiguous > 1000 heuristic).
+      const priceInPaise = Math.round(price * 100);
       updates.push(`price = $${paramCount++}`);
       values.push(priceInPaise);
     }

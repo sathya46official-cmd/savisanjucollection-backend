@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import pool from '../config/database';
+import pool, { queryAsUser } from '../config/database';
 import { authenticate, requireAdmin, AuthRequest } from '../middleware/auth';
 import multer from 'multer';
 import path from 'path';
@@ -150,7 +150,7 @@ router.get('/orders', async (req: AuthRequest, res: Response): Promise<void> => 
 
     query += ' ORDER BY o.created_at DESC';
 
-    const result = await pool.query(query, values);
+    const result = await queryAsUser(req.user!.userId, query, values, { isAdmin: true });
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching orders:', error);
@@ -163,7 +163,7 @@ router.get('/orders/:orderId', async (req: AuthRequest, res: Response): Promise<
   try {
     const { orderId } = req.params;
 
-    const result = await pool.query(`
+    const result = await queryAsUser(req.user!.userId, `
       SELECT 
         o.id,
         o.order_id,
@@ -199,7 +199,7 @@ router.get('/orders/:orderId', async (req: AuthRequest, res: Response): Promise<
       JOIN product_variants pv ON o.variant_id = pv.id
       JOIN products p ON pv.product_id = p.id
       WHERE o.order_id = $1
-    `, [orderId]);
+    `, [orderId], { isAdmin: true });
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Order not found' });
@@ -230,7 +230,12 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
     }
 
     // Get current order status
-    const currentOrder = await pool.query('SELECT status FROM orders WHERE order_id = $1', [orderId]);
+    const currentOrder = await queryAsUser(
+      req.user!.userId,
+      'SELECT status FROM orders WHERE order_id = $1',
+      [orderId],
+      { isAdmin: true }
+    );
     
     if (currentOrder.rows.length === 0) {
       res.status(404).json({ error: 'Order not found' });
@@ -278,7 +283,7 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
     values.push(orderId);
 
     const query = `UPDATE orders SET ${updates.join(', ')} WHERE order_id = $${paramCount} RETURNING *`;
-    const result = await pool.query(query, values);
+    const result = await queryAsUser(req.user!.userId, query, values, { isAdmin: true });
 
     res.json(result.rows[0]);
   } catch (error) {
