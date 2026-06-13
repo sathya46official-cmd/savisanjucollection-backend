@@ -108,7 +108,7 @@ export async function sendVerificationEmail(email: string, token: string): Promi
       `,
     });
 
-    console.log(`✅ Verification email sent to ${email}`);
+    console.log('✅ Verification email sent');
   } catch (error) {
     console.error('❌ Failed to send verification email:', error);
     throw new Error('Failed to send verification email');
@@ -218,7 +218,7 @@ export async function sendOrderConfirmationEmail(email: string, orderId: string)
       `,
     });
 
-    console.log(`✅ Order confirmation email sent to ${email} for order ${orderId}`);
+    console.log(`✅ Order confirmation email sent for order ${orderId}`);
   } catch (error) {
     console.error('❌ Failed to send order confirmation email:', error);
     throw new Error('Failed to send order confirmation email');

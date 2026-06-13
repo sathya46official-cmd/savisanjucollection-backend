@@ -1,185 +1,113 @@
 # Database Migrations
 
-This directory contains SQL migration files for the SaviSanju Collections database schema.
+SQL migration files for the SaviSanju Collections database (self-hosted PostgreSQL).
+
+> **Run them in numeric order.** The migrations are interdependent (later ones
+> reference tables/functions created earlier — e.g. `009`/`010` rely on tables
+> from `001`/`006` and the `app_is_admin()` helper from `009`). The
+> `for file in migrations/*.sql` loop below runs them all in the correct order.
 
 ## Migration Files
 
 | File | Description |
 |------|-------------|
-| `001_initial_schema.sql` | Initial database schema (products, variants, orders, users) |
-| `002_add_featured_products.sql` | Add featured flag and display_order columns |
-| `003_add_hex_codes.sql` | Add hex_code column to product_variants |
-| `004_add_hex_codes_and_cleanup.sql` | Update hex codes for existing variants |
-| `005_email_verification.sql` | Email verification tokens table |
-| `006_cart_system.sql` | Shopping cart items table |
-| `007_stock_notifications.sql` | Stock notification requests table |
+| `001_initial_schema.sql` | Core schema: `products`, `product_variants`, `user_profiles`, `user_auth`, `orders`, `stock_notifications` (with `UNIQUE(email, variant_id)`) |
+| `002_security_architecture_overhaul.sql` | Security architecture changes (constraints, functions; legacy Supabase `auth.uid()` policies removed — superseded by `009`) |
+| `003_allow_guest_orders.sql` | Allow guest orders (`orders.user_id` nullable) |
+| `004_add_hex_codes_and_cleanup.sql` | Add `hex_code` to `product_variants` + cleanup |
+| `005_email_verification.sql` | `email_verification_tokens` table |
+| `006_cart_system.sql` | `cart_items` table (keyed by `user_id`) + its indexes |
+| `007_stock_notifications.sql` | Stock notification request fields/indexes |
+| `008_add_user_roles.sql` | Add trusted `user_profiles.role` column (authoritative for admin) |
+| `009_fix_row_level_security.sql` | Correct, portable RLS on `cart_items`, `orders`, `stock_notifications`; creates least-privilege `savisanju_app` role |
+| `010_admin_audit_log.sql` | `admin_audit_log` append-only table (admin-only RLS) |
 
 ## How to Run Migrations
 
-### Option 1: Using psql directly
+Apply migrations as a privileged role (`postgres` or the DB owner). The running
+**application** should connect as `savisanju_app` (see below), not `postgres`.
+
+### Option 1 — Run all in order (recommended)
 
 ```bash
-# Connect to your database and run each migration in order
-psql -U postgres -d savisanju -f migrations/001_initial_schema.sql
-psql -U postgres -d savisanju -f migrations/002_add_featured_products.sql
-psql -U postgres -d savisanju -f migrations/003_add_hex_codes.sql
-psql -U postgres -d savisanju -f migrations/004_add_hex_codes_and_cleanup.sql
-psql -U postgres -d savisanju -f migrations/005_email_verification.sql
-psql -U postgres -d savisanju -f migrations/006_cart_system.sql
-psql -U postgres -d savisanju -f migrations/007_stock_notifications.sql
-```
-
-### Option 2: Using Docker
-
-If your PostgreSQL is running in a Docker container:
-
-```bash
-# Find your container name
-docker ps | grep postgres
-
-# Run migrations (replace <container-name> with your actual container name)
-docker exec -i <container-name> psql -U postgres -d savisanju < migrations/001_initial_schema.sql
-docker exec -i <container-name> psql -U postgres -d savisanju < migrations/002_add_featured_products.sql
-docker exec -i <container-name> psql -U postgres -d savisanju < migrations/003_add_hex_codes.sql
-docker exec -i <container-name> psql -U postgres -d savisanju < migrations/004_add_hex_codes_and_cleanup.sql
-docker exec -i <container-name> psql -U postgres -d savisanju < migrations/005_email_verification.sql
-docker exec -i <container-name> psql -U postgres -d savisanju < migrations/006_cart_system.sql
-docker exec -i <container-name> psql -U postgres -d savisanju < migrations/007_stock_notifications.sql
-```
-
-### Option 3: Run all migrations at once
-
-```bash
-# Using psql
+# Local psql. ON_ERROR_STOP=1 aborts on the first failure.
 for file in migrations/*.sql; do
   echo "Running $file..."
-  psql -U postgres -d savisanju -f "$file"
-done
-
-# Using Docker
-for file in migrations/*.sql; do
-  echo "Running $file..."
-  docker exec -i <container-name> psql -U postgres -d savisanju < "$file"
+  psql -v ON_ERROR_STOP=1 -U postgres -d savisanju -f "$file" || break
 done
 ```
+
+### Option 2 — Docker
+
+```bash
+docker ps | grep postgres   # find the container name
+for file in migrations/*.sql; do
+  echo "Running $file..."
+  docker exec -i <container-name> psql -v ON_ERROR_STOP=1 -U postgres -d savisanju < "$file" || break
+done
+```
+
+### Activate Row Level Security (important)
+
+RLS (migrations `009`/`010`) only **enforces** when the app connects as the
+non-superuser `savisanju_app` role — superusers bypass RLS. After migrating:
+
+```bash
+sudo -u postgres psql -d savisanju -c \
+  "ALTER ROLE savisanju_app WITH LOGIN PASSWORD '<strong-password>';"
+sudo -u postgres psql -c "GRANT CONNECT ON DATABASE savisanju TO savisanju_app;"
+```
+Then set `DB_USER=savisanju_app` / `DB_PASSWORD=...` in the app env.
+See `deploy/postgresql-hardening.md`.
 
 ## Verify Migrations
 
-After running migrations, verify that all tables and indexes were created successfully:
-
 ```sql
--- Connect to database
 psql -U postgres -d savisanju
 
--- Check all tables exist
-\dt
+\dt   -- expected tables:
+--  - user_profiles        (includes the `role` column from 008, `email_verified`)
+--  - user_auth
+--  - products
+--  - product_variants     (includes `hex_code`)
+--  - orders               (user_id nullable for guest orders; RLS enabled)
+--  - cart_items           (keyed by user_id; RLS enabled)
+--  - email_verification_tokens
+--  - stock_notifications  (RLS enabled; UNIQUE(email, variant_id))
+--  - admin_audit_log      (admin-only RLS, append-only)
+-- NOTE: there is NO `order_items` table — orders reference a variant directly.
 
--- Expected tables:
--- - user_profiles
--- - products
--- - product_variants
--- - orders
--- - order_items
--- - email_verification_tokens
--- - cart_items
--- - stock_notifications
-
--- Check specific tables
-\d email_verification_tokens
-\d cart_items
-\d stock_notifications
-
--- Check indexes
-\di
-
--- Expected indexes:
--- - idx_verification_token
--- - idx_verification_user
--- - idx_cart_user
--- - idx_stock_notify_variant
-
--- Verify data integrity
-SELECT COUNT(*) FROM products;
-SELECT COUNT(*) FROM product_variants;
-SELECT COUNT(*) FROM user_profiles;
+-- RLS helpers / policies
+\df app_current_user_id
+\df app_is_admin
+\d+ orders        -- shows policies cart_items/orders/etc.
 ```
 
-## Rollback (if needed)
+## Rollback (destructive — dev only)
 
-If you need to rollback migrations, you can drop the tables in reverse order:
+Drop in reverse dependency order. Only do this to fully reset a dev database:
 
 ```sql
--- Drop new tables (migrations 005-007)
-DROP TABLE IF EXISTS stock_notifications CASCADE;
-DROP TABLE IF EXISTS cart_items CASCADE;
-DROP TABLE IF EXISTS email_verification_tokens CASCADE;
-
--- Note: Only drop these if you want to completely reset the database
--- DROP TABLE IF EXISTS order_items CASCADE;
--- DROP TABLE IF EXISTS orders CASCADE;
--- DROP TABLE IF EXISTS product_variants CASCADE;
--- DROP TABLE IF EXISTS products CASCADE;
--- DROP TABLE IF EXISTS user_profiles CASCADE;
-```
-
-## Production Deployment
-
-When deploying to production (Oracle VPS):
-
-1. **Backup existing database** (if any):
-   ```bash
-   pg_dump -U postgres savisanju > backup_$(date +%Y%m%d_%H%M%S).sql
-   ```
-
-2. **Run migrations**:
-   ```bash
-   cd /path/to/savisanju-backend
-   for file in migrations/*.sql; do
-     echo "Running $file..."
-     psql -U savisanju_user -d savisanju -f "$file"
-   done
-   ```
-
-3. **Verify migrations**:
-   ```bash
-   psql -U savisanju_user -d savisanju -c "\dt"
-   psql -U savisanju_user -d savisanju -c "\di"
-   ```
-
-4. **Test application**:
-   - Start backend: `pm2 start dist/server.js --name savisanju-backend`
-   - Check logs: `pm2 logs savisanju-backend`
-   - Test API endpoints
-
-## Troubleshooting
-
-### Error: "relation already exists"
-
-This means the table was already created. You can either:
-- Skip the migration (it's already applied)
-- Drop the table and re-run: `DROP TABLE IF EXISTS <table_name> CASCADE;`
-
-### Error: "permission denied"
-
-Make sure your database user has the correct permissions:
-```sql
-GRANT ALL PRIVILEGES ON DATABASE savisanju TO savisanju_user;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO savisanju_user;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO savisanju_user;
-```
-
-### Error: "database does not exist"
-
-Create the database first:
-```sql
-CREATE DATABASE savisanju;
+DROP TABLE IF EXISTS admin_audit_log CASCADE;          -- 010
+DROP TABLE IF EXISTS stock_notifications CASCADE;      -- 001/007
+DROP TABLE IF EXISTS cart_items CASCADE;               -- 006
+DROP TABLE IF EXISTS email_verification_tokens CASCADE;-- 005
+DROP TABLE IF EXISTS orders CASCADE;                   -- 001/003
+DROP TABLE IF EXISTS product_variants CASCADE;         -- 001
+DROP TABLE IF EXISTS products CASCADE;                 -- 001
+DROP TABLE IF EXISTS user_auth CASCADE;                -- 001
+DROP TABLE IF EXISTS user_profiles CASCADE;            -- 001
+DROP FUNCTION IF EXISTS app_current_user_id();         -- 009
+DROP FUNCTION IF EXISTS app_is_admin();                -- 009
+-- The savisanju_app role is shared infra; drop only if truly resetting:
+-- DROP OWNED BY savisanju_app; DROP ROLE IF EXISTS savisanju_app;
 ```
 
 ## Migration Best Practices
 
-1. **Always backup before running migrations in production**
-2. **Test migrations in development first**
-3. **Run migrations in order** (001, 002, 003, etc.)
-4. **Verify each migration** before proceeding to the next
-5. **Keep migration files immutable** (never edit after deployment)
-6. **Document any manual data changes** needed after migrations
+1. **Backup before running migrations in production** (`pg_dump`).
+2. **Test in development first.**
+3. **Run in numeric order** (the loop handles this).
+4. **Keep applied migration files immutable.**
+5. **Document any manual data changes** (e.g. the email-verification grandfather
+   `UPDATE` in `deploy/SECURITY-DEPLOYMENT.md`).

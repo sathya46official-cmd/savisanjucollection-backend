@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool, { queryAsUser } from '../config/database';
 import { authenticate, requireAdmin, AuthRequest } from '../middleware/auth';
+import { logAdminAction } from '../utils/audit';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -107,6 +108,16 @@ router.put('/stock/:variantId', async (req: AuthRequest, res: Response): Promise
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+    }
+
+    // Best-effort audit trail (never blocks the response).
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'stock.update', {
+        targetType: 'product_variant',
+        targetId: variantId,
+        metadata: { stock_quantity },
+        ip: req.ip
+      });
     }
 
     res.json({ success: true, variant: result.rows[0] });
@@ -296,6 +307,18 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
 
     const query = `UPDATE orders SET ${updates.join(', ')} WHERE order_id = $${paramCount} RETURNING *`;
     const result = await queryAsUser(req.user!.userId, query, values, { isAdmin: true });
+
+    // Best-effort audit trail (never blocks the response).
+    void logAdminAction(req.user, 'order.status.update', {
+      targetType: 'order',
+      targetId: orderId,
+      metadata: {
+        from: currentStatus,
+        to: status ?? currentStatus,
+        notes_updated: notes !== undefined
+      },
+      ip: req.ip
+    });
 
     res.json(result.rows[0]);
   } catch (error) {

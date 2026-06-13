@@ -104,7 +104,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     // Find user by email
     const userResult = await query(
-      `SELECT up.id, up.email, up.name, up.role, ua.password_hash
+      `SELECT up.id, up.email, up.name, up.role, up.email_verified, ua.password_hash
        FROM user_profiles up
        INNER JOIN user_auth ua ON up.id = ua.user_id
        WHERE up.email = $1`,
@@ -124,6 +124,16 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     if (!isValidPassword) {
       res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    // Enforce email verification AFTER a valid password, so we never reveal a
+    // mailbox's verification status to anonymous/unauthenticated callers.
+    if (!user.email_verified) {
+      res.status(403).json({
+        error: 'Please verify your email before logging in.',
+        code: 'EMAIL_NOT_VERIFIED'
+      });
       return;
     }
 
@@ -287,5 +297,61 @@ export const adminLogin = async (req: Request, res: Response): Promise<void> => 
     // Server errors
     console.error('Admin login error:', error);
     res.status(500).json({ error: 'Login failed. Please try again later.' });
+  }
+};
+
+/**
+ * POST /api/auth/resend-verification
+ * Re-issue an email verification link.
+ *
+ * Always responds with an identical generic 200 regardless of whether the email
+ * exists or is already verified, to avoid account/verification-state enumeration.
+ */
+export const resendVerification = async (req: Request, res: Response): Promise<void> => {
+  const generic = {
+    success: true,
+    message: 'If that email exists and is unverified, a verification link has been sent.'
+  };
+
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+
+    // Basic shape check only; never reveal validation specifics here.
+    if (!email || !email.includes('@')) {
+      res.status(200).json(generic);
+      return;
+    }
+
+    const userResult = await query(
+      `SELECT id, email_verified FROM user_profiles WHERE email = $1`,
+      [email]
+    );
+
+    // Only send when the account exists AND is still unverified.
+    if (userResult.rows.length > 0 && !userResult.rows[0].email_verified) {
+      const userId = userResult.rows[0].id;
+      const verificationToken = randomBytes(32).toString('hex');
+
+      await transaction(async (client) => {
+        // Invalidate any previously issued tokens for this user.
+        await client.query(
+          `DELETE FROM email_verification_tokens WHERE user_id = $1`,
+          [userId]
+        );
+        await client.query(
+          `INSERT INTO email_verification_tokens (user_id, token, expires_at)
+           VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
+          [userId, verificationToken]
+        );
+      });
+
+      await sendVerificationEmail(email, verificationToken);
+    }
+
+    res.status(200).json(generic);
+  } catch (error) {
+    // Even on error, do not leak whether the email exists. Log server-side only.
+    console.error('Resend verification error:', error);
+    res.status(200).json(generic);
   }
 };

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../config/database';
 import { authenticate, requireAdmin, AuthRequest } from '../middleware/auth';
+import { logAdminAction } from '../utils/audit';
 
 const router = Router();
 
@@ -118,6 +119,13 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
       [name, description, category, featured || false, display_order || 0]
     );
 
+    void logAdminAction(req.user, 'product.create', {
+      targetType: 'product',
+      targetId: result.rows[0]?.id ?? null,
+      metadata: { name, category },
+      ip: req.ip
+    });
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error creating product:', error);
@@ -186,6 +194,15 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
       res.status(404).json({ error: 'Product not found' });
     }
 
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'product.update', {
+        targetType: 'product',
+        targetId: id,
+        metadata: { fields: updates.filter(u => !u.startsWith('updated_at')) },
+        ip: req.ip
+      });
+    }
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating product:', error);
@@ -202,6 +219,15 @@ router.delete('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: 
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Product not found' });
+    }
+
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'product.delete', {
+        targetType: 'product',
+        targetId: id,
+        metadata: { name: result.rows[0]?.name },
+        ip: req.ip
+      });
     }
 
     res.json({ success: true, message: 'Product deleted successfully' });
@@ -244,6 +270,13 @@ router.post('/:id/variants', authenticate, requireAdmin, async (req: AuthRequest
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [id, color, size, priceInPaise, quantity || 0, image_url, is_negotiable || false, hex_code]
     );
+
+    void logAdminAction(req.user, 'variant.create', {
+      targetType: 'product_variant',
+      targetId: result.rows[0]?.id ?? null,
+      metadata: { product_id: id, color, size, price_paise: priceInPaise },
+      ip: req.ip
+    });
 
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -320,6 +353,15 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
       res.status(404).json({ error: 'Variant not found' });
     }
 
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'variant.update', {
+        targetType: 'product_variant',
+        targetId: id,
+        metadata: { fields: updates.filter(u => !u.startsWith('updated_at')) },
+        ip: req.ip
+      });
+    }
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating variant:', error);
@@ -336,6 +378,15 @@ router.delete('/variants/:id', authenticate, requireAdmin, async (req: AuthReque
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+    }
+
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'variant.delete', {
+        targetType: 'product_variant',
+        targetId: id,
+        metadata: { product_id: result.rows[0]?.product_id },
+        ip: req.ip
+      });
     }
 
     res.json({ success: true, message: 'Variant deleted successfully' });

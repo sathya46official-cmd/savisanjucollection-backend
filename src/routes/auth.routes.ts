@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authRateLimiter } from '../middleware/rateLimit';
-import { register, login, verify, adminLogin } from '../controllers/auth.controller';
+import { register, login, verify, adminLogin, resendVerification } from '../controllers/auth.controller';
 
 const router = Router();
 
@@ -9,6 +9,9 @@ router.post('/register', authRateLimiter, register);
 
 // POST /api/auth/login - User login with JWT authentication
 router.post('/login', authRateLimiter, login);
+
+// POST /api/auth/resend-verification - Re-issue an email verification link (generic response)
+router.post('/resend-verification', authRateLimiter, resendVerification);
 
 // POST /api/admin/login - Admin login with JWT authentication
 router.post('/admin/login', authRateLimiter, adminLogin);
