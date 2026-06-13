@@ -21,12 +21,8 @@ router.get('/verify', verify);
 
 // POST /api/auth/logout - User logout (clear auth cookie)
 router.post('/logout', (req, res) => {
-  res.clearCookie('auth_token', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/'
-  });
+  const { getAuthCookieOptions } = require('../utils/jwt');
+  res.clearCookie('auth_token', getAuthCookieOptions());
   res.status(200).json({ success: true, message: 'Logged out successfully' });
 });
 

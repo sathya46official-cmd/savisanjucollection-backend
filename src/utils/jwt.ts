@@ -34,16 +34,46 @@ export const verifyToken = (token: string): JWTPayload | null => {
   }
 };
 
+type SameSiteMode = 'lax' | 'strict' | 'none';
+
+/**
+ * Resolve the cookie SameSite mode.
+ *
+ * Default is 'lax' (secure, works when frontend & API share a registrable
+ * domain, e.g. app.example.com + api.example.com). If the frontend is on a
+ * DIFFERENT site than the API (e.g. *.vercel.app frontend + api.example.com
+ * backend), browsers will NOT send a Lax cookie on cross-site fetch/XHR, so the
+ * auth cookie must be SameSite=None. Set COOKIE_SAMESITE=none for that case.
+ * SameSite=None REQUIRES Secure (HTTPS) — enforced below.
+ */
+function resolveSameSite(): SameSiteMode {
+  const v = (process.env.COOKIE_SAMESITE || 'lax').toLowerCase();
+  return v === 'none' || v === 'strict' ? v : 'lax';
+}
+
+/**
+ * Shared auth-cookie attributes. The SAME attributes must be used to set and to
+ * clear the cookie, otherwise clearing silently fails.
+ */
+export const getAuthCookieOptions = () => {
+  const sameSite = resolveSameSite();
+  // Browsers reject SameSite=None without Secure. Also always Secure in prod.
+  const secure = sameSite === 'none' ? true : process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure,
+    sameSite,
+    path: '/' as const,
+  };
+};
+
 export const generateAuthCookie = (token: string) => {
   return {
     name: 'auth_token',
     value: token,
     options: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax' as const,
+      ...getAuthCookieOptions(),
       maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      path: '/'
     }
   };
 };
