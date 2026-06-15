@@ -94,11 +94,13 @@ router.put('/stock/:variantId', async (req: AuthRequest, res: Response): Promise
     // Validate stock_quantity
     if (stock_quantity === undefined || stock_quantity === null) {
       res.status(400).json({ error: 'stock_quantity is required' });
+      return;
     }
 
     // Validate stock_quantity is non-negative integer
     if (!Number.isInteger(stock_quantity) || stock_quantity < 0) {
       res.status(400).json({ error: 'stock_quantity must be a non-negative integer' });
+      return;
     }
 
     const result = await pool.query(
@@ -108,6 +110,7 @@ router.put('/stock/:variantId', async (req: AuthRequest, res: Response): Promise
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+      return;
     }
 
     // Best-effort audit trail (never blocks the response).
@@ -226,6 +229,7 @@ router.get('/orders/:orderId', async (req: AuthRequest, res: Response): Promise<
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Order not found' });
+      return;
     }
 
     res.json(result.rows[0]);
@@ -244,12 +248,14 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
     // Validate admin_notes length if provided
     if (notes !== undefined && notes !== null && notes.length > 1000) {
       res.status(400).json({ error: 'Admin notes must not exceed 1000 characters' });
+      return;
     }
 
     // Validate status transitions
     const validStatuses = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'];
     if (status && !validStatuses.includes(status)) {
       res.status(400).json({ error: 'Invalid order status' });
+      return;
     }
 
     // Get current order status
@@ -262,6 +268,7 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
     
     if (currentOrder.rows.length === 0) {
       res.status(404).json({ error: 'Order not found' });
+      return;
     }
 
     const currentStatus = currentOrder.rows[0].status;
@@ -281,6 +288,7 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
         res.status(400).json({ 
           error: `Invalid status transition from ${currentStatus} to ${status}` 
         });
+        return;
       }
     }
 
@@ -300,6 +308,7 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
 
     if (updates.length === 0) {
       res.status(400).json({ error: 'No fields to update' });
+      return;
     }
 
     updates.push(`updated_at = NOW()`);

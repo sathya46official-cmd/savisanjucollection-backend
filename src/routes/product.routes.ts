@@ -86,6 +86,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Product not found' });
+      return;
     }
 
     res.json(result.rows[0]);
@@ -102,16 +103,19 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
 
     if (!name) {
       res.status(400).json({ error: 'Product name is required' });
+      return;
     }
 
     // Validate name length
     if (name.length > 255) {
       res.status(400).json({ error: 'Product name must not exceed 255 characters' });
+      return;
     }
 
     // Validate description length
     if (description && description.length > 2000) {
       res.status(400).json({ error: 'Description must not exceed 2000 characters' });
+      return;
     }
 
     const result = await pool.query(
@@ -143,15 +147,18 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
     if (name !== undefined) {
       if (!name || name.trim() === '') {
         res.status(400).json({ error: 'Product name cannot be empty' });
+        return;
       }
       if (name.length > 255) {
         res.status(400).json({ error: 'Product name must not exceed 255 characters' });
+        return;
       }
     }
 
     // Validate description length if provided
     if (description !== undefined && description.length > 2000) {
       res.status(400).json({ error: 'Description must not exceed 2000 characters' });
+      return;
     }
 
     // Build dynamic update query
@@ -182,6 +189,7 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
 
     if (updates.length === 0) {
       res.status(400).json({ error: 'No fields to update' });
+      return;
     }
 
     updates.push(`updated_at = NOW()`);
@@ -192,6 +200,7 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Product not found' });
+      return;
     }
 
     if (result.rows.length > 0) {
@@ -219,6 +228,7 @@ router.delete('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: 
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Product not found' });
+      return;
     }
 
     if (result.rows.length > 0) {
@@ -341,6 +351,7 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
 
     if (updates.length === 0) {
       res.status(400).json({ error: 'No fields to update' });
+      return;
     }
 
     updates.push(`updated_at = NOW()`);
@@ -351,6 +362,7 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+      return;
     }
 
     if (result.rows.length > 0) {
@@ -378,6 +390,7 @@ router.delete('/variants/:id', authenticate, requireAdmin, async (req: AuthReque
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+      return;
     }
 
     if (result.rows.length > 0) {
@@ -434,6 +447,7 @@ router.get('/variants/:id', async (req: Request, res: Response): Promise<void> =
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+      return;
     }
 
     res.json(result.rows[0]);
