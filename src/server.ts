@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import express, { Application } from 'express';
+import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -106,6 +107,9 @@ app.get('/health', (req, res) => {
 // Keyed on the real client IP thanks to the `trust proxy` setting above.
 // Stricter per-endpoint limits (e.g. auth) are layered on top in their routers.
 app.use('/api', rateLimiter);
+
+// Serve uploaded images as static files
+app.use('/uploads', express.static(path.join(process.cwd(), '..', 'public', 'uploads')));
 
 // API routes
 app.use('/api/auth', authRoutes);
