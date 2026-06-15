@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import pool, { queryAsUser } from '../config/database';
 import { randomBytes } from 'crypto';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { resolveImageUrl } from '../utils/imageUrl';
 
 const router = Router();
 
@@ -151,7 +152,11 @@ router.get('/history', authenticate, async (req: AuthRequest, res: Response): Pr
       [userId]
     );
 
-    res.json(result.rows);
+    const orders = result.rows.map((order: any) => ({
+      ...order,
+      product_image: resolveImageUrl(order.product_image)
+    }));
+    res.json(orders);
   } catch (error) {
     console.error('Error fetching order history:', error);
     res.status(500).json({ error: 'Failed to fetch order history' });

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../config/database';
 import { authenticate, requireAdmin, AuthRequest } from '../middleware/auth';
 import { logAdminAction } from '../utils/audit';
+import { resolveVariantUrls } from '../utils/imageUrl';
 
 const router = Router();
 
@@ -51,7 +52,11 @@ router.get('/', async (req: Request, res: Response) => {
         ORDER BY p.created_at`;
 
     const result = await pool.query(query);
-    res.json(result.rows);
+    const products = result.rows.map((p: any) => ({
+      ...p,
+      variants: p.variants ? p.variants.map(resolveVariantUrls) : []
+    }));
+    res.json(products);
   } catch (error) {
     console.error('Error fetching products:', error);
     res.status(500).json({ error: 'Failed to fetch products' });
@@ -89,7 +94,11 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    res.json(result.rows[0]);
+    const product = result.rows[0];
+    res.json({
+      ...product,
+      variants: product.variants ? product.variants.map(resolveVariantUrls) : []
+    });
   } catch (error) {
     console.error('Error fetching product:', error);
     res.status(500).json({ error: 'Failed to fetch product' });
@@ -422,7 +431,7 @@ router.get('/variants/all', async (req: Request, res: Response) => {
       ORDER BY p.name, pv.color
     `);
 
-    res.json(result.rows);
+    res.json(result.rows.map(resolveVariantUrls));
   } catch (error) {
     console.error('Error fetching variants:', error);
     res.status(500).json({ error: 'Failed to fetch variants' });
@@ -450,7 +459,7 @@ router.get('/variants/:id', async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    res.json(result.rows[0]);
+    res.json(resolveVariantUrls(result.rows[0]));
   } catch (error) {
     console.error('Error fetching variant:', error);
     res.status(500).json({ error: 'Failed to fetch variant' });

@@ -6,6 +6,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+import { resolveImageUrl } from '../utils/imageUrl';
 
 const router = Router();
 
@@ -75,7 +76,7 @@ router.post('/upload', upload.array('images', 4), async (req: AuthRequest, res: 
 
     // Generate URLs for uploaded files
     const urls = files.map(file => {
-      return `/uploads/products/${file.filename}`;
+      return resolveImageUrl(`/uploads/products/${file.filename}`);
     });
 
     res.json({ urls });
@@ -177,7 +178,11 @@ router.get('/orders', async (req: AuthRequest, res: Response): Promise<void> => 
     query += ' ORDER BY o.created_at DESC';
 
     const result = await queryAsUser(req.user!.userId, query, values, { isAdmin: true });
-    res.json(result.rows);
+    const orders = result.rows.map((order: any) => ({
+      ...order,
+      variant_image_url: resolveImageUrl(order.variant_image_url)
+    }));
+    res.json(orders);
   } catch (error) {
     console.error('Error fetching orders:', error);
     res.status(500).json({ error: 'Failed to fetch orders' });
@@ -232,7 +237,10 @@ router.get('/orders/:orderId', async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
-    res.json(result.rows[0]);
+    res.json({
+      ...result.rows[0],
+      variant_image_url: resolveImageUrl(result.rows[0].variant_image_url)
+    });
   } catch (error) {
     console.error('Error fetching order:', error);
     res.status(500).json({ error: 'Failed to fetch order' });

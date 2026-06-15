@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import pool, { queryAsUser } from '../config/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { resolveImageUrl } from '../utils/imageUrl';
 
 const router = Router();
 
@@ -31,7 +32,10 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
       [userId]
     );
 
-    const items = result.rows;
+    const items = result.rows.map((item: any) => ({
+      ...item,
+      product_image: resolveImageUrl(item.product_image)
+    }));
     const total = items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
 
     res.json({ items, total, count: items.length });
