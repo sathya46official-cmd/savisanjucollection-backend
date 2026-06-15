@@ -59,12 +59,27 @@ export const getAuthCookieOptions = () => {
   const sameSite = resolveSameSite();
   // Browsers reject SameSite=None without Secure. Also always Secure in prod.
   const secure = sameSite === 'none' ? true : process.env.NODE_ENV === 'production';
-  return {
+  const options: {
+    httpOnly: boolean;
+    secure: boolean;
+    sameSite: SameSiteMode;
+    path: '/';
+    domain?: string;
+  } = {
     httpOnly: true,
     secure,
     sameSite,
     path: '/' as const,
   };
+
+  // When the frontend and API are on different subdomains (e.g. www.example.com
+  // vs api.example.com), set COOKIE_DOMAIN=example.com so the auth cookie is
+  // visible to both. Leave unset for localhost / same-origin deployments.
+  if (process.env.COOKIE_DOMAIN) {
+    options.domain = process.env.COOKIE_DOMAIN;
+  }
+
+  return options;
 };
 
 export const generateAuthCookie = (token: string) => {
