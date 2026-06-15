@@ -1,8 +1,9 @@
+import 'dotenv/config';
+
 import express, { Application } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
-import dotenv from 'dotenv';
 import { errorHandler } from './middleware/errorHandler';
 import { notFoundHandler } from './middleware/notFoundHandler';
 import { requestLogger } from './middleware/requestLogger';
@@ -15,9 +16,6 @@ import orderRoutes from './routes/order.routes';
 import adminRoutes from './routes/admin.routes';
 import stockRoutes from './routes/stock.routes';
 import productRoutes from './routes/product.routes';
-
-// Load environment variables
-dotenv.config();
 
 const app: Application = express();
 const PORT = process.env.PORT || 5000;
@@ -39,8 +37,38 @@ app.set('trust proxy', Number.isFinite(trustProxyHops) ? trustProxyHops : 1);
 app.use(helmet());
 
 // CORS configuration
+// Allow the configured frontend URL plus its www/non-www variant so users
+// landing on either domain can authenticate. credentials=true means the
+// Access-Control-Allow-Origin header can never be '*'.
+const allowedOrigins = (() => {
+  const configured = process.env.FRONTEND_URL?.trim();
+  const origins = new Set<string>();
+  if (configured) {
+    origins.add(configured);
+    try {
+      const url = new URL(configured);
+      const hostname = url.hostname;
+      if (hostname.startsWith('www.')) {
+        origins.add(`${url.protocol}//${hostname.slice(4)}${url.port ? ':' + url.port : ''}`);
+      } else if (hostname && !['localhost', '127.0.0.1'].includes(hostname)) {
+        origins.add(`${url.protocol}//www.${hostname}${url.port ? ':' + url.port : ''}`);
+      }
+    } catch {
+      // Not a valid URL; keep only the configured value
+    }
+  } else {
+    origins.add('http://localhost:3000');
+  }
+  return Array.from(origins);
+})();
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. mobile apps, curl, same-origin server components)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS blocked origin: ${origin}`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
@@ -99,6 +127,10 @@ app.listen(PORT, () => {
   console.log(`📝 Environment: ${process.env.NODE_ENV}`);
   console.log(`🔗 API URL: ${process.env.API_URL || `http://localhost:${PORT}`}`);
   console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL}`);
+  console.log(`🍪 Cookie SameSite: ${process.env.COOKIE_SAMESITE || 'lax'}`);
+  if (process.env.NODE_ENV === 'production' && (process.env.COOKIE_SAMESITE || 'lax').toLowerCase() !== 'none') {
+    console.warn('⚠️  WARNING: If the frontend is hosted on a different origin than the API, set COOKIE_SAMESITE=none or auth cookies will not be sent on cross-site requests.');
+  }
 });
 
 // Graceful shutdown
