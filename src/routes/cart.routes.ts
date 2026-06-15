@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import pool from '../config/database';
+import pool, { queryAsUser } from '../config/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
 
 const router = Router();
@@ -12,7 +12,8 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.userId;
 
-    const result = await pool.query(
+    const result = await queryAsUser(
+      userId,
       `SELECT 
         ci.id,
         ci.variant_id,
@@ -73,7 +74,8 @@ router.post('/add', async (req: AuthRequest, res: Response): Promise<void> => {
     }
 
     // Upsert: add or increment quantity
-    const result = await pool.query(
+    const result = await queryAsUser(
+      userId,
       `INSERT INTO cart_items (user_id, variant_id, quantity)
        VALUES ($1, $2, $3)
        ON CONFLICT (user_id, variant_id)
@@ -121,7 +123,8 @@ router.put('/update', async (req: AuthRequest, res: Response): Promise<void> => 
       return;
     }
 
-    const result = await pool.query(
+    const result = await queryAsUser(
+      userId,
       `UPDATE cart_items SET quantity = $1, updated_at = NOW()
        WHERE user_id = $2 AND variant_id = $3
        RETURNING *`,
@@ -151,7 +154,8 @@ router.delete('/remove', async (req: AuthRequest, res: Response): Promise<void> 
       return;
     }
 
-    const result = await pool.query(
+    const result = await queryAsUser(
+      userId,
       'DELETE FROM cart_items WHERE user_id = $1 AND variant_id = $2 RETURNING *',
       [userId, variant_id]
     );
@@ -172,7 +176,7 @@ router.delete('/remove', async (req: AuthRequest, res: Response): Promise<void> 
 router.delete('/clear', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.userId;
-    await pool.query('DELETE FROM cart_items WHERE user_id = $1', [userId]);
+    await queryAsUser(userId, 'DELETE FROM cart_items WHERE user_id = $1', [userId]);
     res.json({ success: true, message: 'Cart cleared' });
   } catch (error) {
     console.error('Error clearing cart:', error);

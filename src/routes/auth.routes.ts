@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authRateLimiter } from '../middleware/rateLimit';
-import { register, login, verify, adminLogin } from '../controllers/auth.controller';
+import { register, login, verify, adminLogin, resendVerification } from '../controllers/auth.controller';
 
 const router = Router();
 
@@ -10,6 +10,9 @@ router.post('/register', authRateLimiter, register);
 // POST /api/auth/login - User login with JWT authentication
 router.post('/login', authRateLimiter, login);
 
+// POST /api/auth/resend-verification - Re-issue an email verification link (generic response)
+router.post('/resend-verification', authRateLimiter, resendVerification);
+
 // POST /api/admin/login - Admin login with JWT authentication
 router.post('/admin/login', authRateLimiter, adminLogin);
 
@@ -18,12 +21,8 @@ router.get('/verify', verify);
 
 // POST /api/auth/logout - User logout (clear auth cookie)
 router.post('/logout', (req, res) => {
-  res.clearCookie('auth_token', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/'
-  });
+  const { getAuthCookieOptions } = require('../utils/jwt');
+  res.clearCookie('auth_token', getAuthCookieOptions());
   res.status(200).json({ success: true, message: 'Logged out successfully' });
 });
 

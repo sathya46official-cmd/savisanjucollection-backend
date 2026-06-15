@@ -66,25 +66,9 @@ CREATE TABLE IF NOT EXISTS product_variants (
 -- ============================================
 -- SHOPPING CART
 -- ============================================
-
--- Cart table
-CREATE TABLE IF NOT EXISTS cart (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(user_id)
-);
-
--- Cart items table
-CREATE TABLE IF NOT EXISTS cart_items (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  cart_id UUID NOT NULL REFERENCES cart(id) ON DELETE CASCADE,
-  variant_id UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
-  quantity INTEGER DEFAULT 1 NOT NULL CHECK (quantity > 0),
-  added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(cart_id, variant_id)
-);
+-- The shopping cart is modelled as a single `cart_items` table keyed by
+-- `user_id` (see migration 006_cart_system.sql). The earlier `cart` +
+-- `cart_items(cart_id)` design was removed to keep one authoritative schema.
 
 -- ============================================
 -- ORDERS
@@ -137,7 +121,8 @@ CREATE TABLE IF NOT EXISTS stock_notifications (
   variant_id UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
   email VARCHAR(255) NOT NULL,
   notified_at TIMESTAMP WITH TIME ZONE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(email, variant_id)
 );
 
 -- ============================================
@@ -152,10 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 CREATE INDEX IF NOT EXISTS idx_product_variants_product_id ON product_variants(product_id);
 CREATE INDEX IF NOT EXISTS idx_product_variants_quantity ON product_variants(quantity);
 
--- Cart indexes
-CREATE INDEX IF NOT EXISTS idx_cart_user_id ON cart(user_id);
-CREATE INDEX IF NOT EXISTS idx_cart_items_cart_id ON cart_items(cart_id);
-CREATE INDEX IF NOT EXISTS idx_cart_items_variant_id ON cart_items(variant_id);
+-- Cart indexes are defined alongside the cart_items table in migration 006.
 
 -- Order indexes
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
@@ -193,31 +175,24 @@ CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON products
 CREATE TRIGGER update_product_variants_updated_at BEFORE UPDATE ON product_variants
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_cart_updated_at BEFORE UPDATE ON cart
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
 CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================
--- INITIAL DATA (Optional)
+-- INITIAL DATA
 -- ============================================
 
--- Insert admin user (password: Admin@123 - CHANGE THIS!)
--- Password hash generated with: bcrypt.hash('Admin@123', 10)
-INSERT INTO user_profiles (id, email, name, email_verified)
-VALUES (
-  '00000000-0000-0000-0000-000000000001',
-  'admin@savisanju.com',
-  'Admin',
-  TRUE
-) ON CONFLICT (email) DO NOTHING;
-
-INSERT INTO user_auth (user_id, password_hash)
-VALUES (
-  '00000000-0000-0000-0000-000000000001',
-  '$2a$10$rKZLvXz8QxVZQ7Y5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z'
-) ON CONFLICT (user_id) DO NOTHING;
+-- NOTE: No admin user is seeded here.
+-- Seeding a hardcoded admin (with a known/placeholder password hash) is a
+-- security risk (hardcoded credentials / admin account takeover).
+-- Create the admin account explicitly and securely instead:
+--
+--   ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='<strong-password>' \
+--     npx tsx scripts/create-admin.ts
+--
+-- The script generates a real bcrypt hash from an environment-provided
+-- password and sets role='admin' (see migration 008). The password is never
+-- stored in source control.
 
 -- ============================================
 -- COMMENTS
@@ -227,8 +202,6 @@ COMMENT ON TABLE user_profiles IS 'User profile information';
 COMMENT ON TABLE user_auth IS 'User authentication credentials';
 COMMENT ON TABLE products IS 'Product catalog';
 COMMENT ON TABLE product_variants IS 'Product variants (color, size, price)';
-COMMENT ON TABLE cart IS 'User shopping carts';
-COMMENT ON TABLE cart_items IS 'Items in shopping carts';
 COMMENT ON TABLE orders IS 'Customer orders';
 COMMENT ON TABLE stock_notifications IS 'Stock availability notification requests';
 

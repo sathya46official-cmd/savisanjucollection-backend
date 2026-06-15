@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { errorHandler } from './middleware/errorHandler';
 import { notFoundHandler } from './middleware/notFoundHandler';
 import { requestLogger } from './middleware/requestLogger';
+import { rateLimiter } from './middleware/rateLimit';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
@@ -20,6 +21,19 @@ dotenv.config();
 
 const app: Application = express();
 const PORT = process.env.PORT || 5000;
+
+// ── Reverse-proxy trust (CRITICAL fix for the "Nginx proxy trap" global DoS) ──
+// Behind a reverse proxy (Nginx, load balancer), Express sees the proxy's IP for
+// every request unless `trust proxy` is configured. With it unset, all clients
+// share one IP bucket, so the per-IP rate limiter collapses into a GLOBAL limiter
+// and a single client (e.g. 5 failed logins) can lock out every user.
+//
+// We use a NUMERIC hop count (never `true`): `true` would trust a client-supplied
+// X-Forwarded-For header, letting attackers spoof IPs to evade rate limiting.
+const trustProxyHops = Number(
+  process.env.TRUST_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? 1 : 0)
+);
+app.set('trust proxy', Number.isFinite(trustProxyHops) ? trustProxyHops : 1);
 
 // Security middleware
 app.use(helmet());
@@ -59,6 +73,11 @@ app.get('/health', (req, res) => {
     environment: process.env.NODE_ENV
   });
 });
+
+// Global rate limiting for all API routes (baseline DoS protection).
+// Keyed on the real client IP thanks to the `trust proxy` setting above.
+// Stricter per-endpoint limits (e.g. auth) are layered on top in their routers.
+app.use('/api', rateLimiter);
 
 // API routes
 app.use('/api/auth', authRoutes);

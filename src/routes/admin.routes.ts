@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
-import pool from '../config/database';
+import pool, { queryAsUser } from '../config/database';
 import { authenticate, requireAdmin, AuthRequest } from '../middleware/auth';
+import { logAdminAction } from '../utils/audit';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -25,9 +26,21 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const filename = `${uuidv4()}${ext}`;
-    cb(null, filename);
+    // Derive the extension from the validated MIME type, never from the
+    // user-supplied filename (which could carry .svg/.html/.php and become
+    // stored XSS / RCE if the upload directory is ever served).
+    const MIME_EXT: Record<string, string> = {
+      'image/jpeg': '.jpg',
+      'image/jpg': '.jpg',
+      'image/png': '.png',
+      'image/webp': '.webp'
+    };
+    const ext = MIME_EXT[file.mimetype];
+    if (!ext) {
+      cb(new Error('Unsupported file type'), '');
+      return;
+    }
+    cb(null, `${uuidv4()}${ext}`);
   }
 });
 
@@ -81,11 +94,13 @@ router.put('/stock/:variantId', async (req: AuthRequest, res: Response): Promise
     // Validate stock_quantity
     if (stock_quantity === undefined || stock_quantity === null) {
       res.status(400).json({ error: 'stock_quantity is required' });
+      return;
     }
 
     // Validate stock_quantity is non-negative integer
     if (!Number.isInteger(stock_quantity) || stock_quantity < 0) {
       res.status(400).json({ error: 'stock_quantity must be a non-negative integer' });
+      return;
     }
 
     const result = await pool.query(
@@ -95,6 +110,17 @@ router.put('/stock/:variantId', async (req: AuthRequest, res: Response): Promise
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+      return;
+    }
+
+    // Best-effort audit trail (never blocks the response).
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'stock.update', {
+        targetType: 'product_variant',
+        targetId: variantId,
+        metadata: { stock_quantity },
+        ip: req.ip
+      });
     }
 
     res.json({ success: true, variant: result.rows[0] });
@@ -150,7 +176,7 @@ router.get('/orders', async (req: AuthRequest, res: Response): Promise<void> => 
 
     query += ' ORDER BY o.created_at DESC';
 
-    const result = await pool.query(query, values);
+    const result = await queryAsUser(req.user!.userId, query, values, { isAdmin: true });
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching orders:', error);
@@ -163,7 +189,7 @@ router.get('/orders/:orderId', async (req: AuthRequest, res: Response): Promise<
   try {
     const { orderId } = req.params;
 
-    const result = await pool.query(`
+    const result = await queryAsUser(req.user!.userId, `
       SELECT 
         o.id,
         o.order_id,
@@ -199,10 +225,11 @@ router.get('/orders/:orderId', async (req: AuthRequest, res: Response): Promise<
       JOIN product_variants pv ON o.variant_id = pv.id
       JOIN products p ON pv.product_id = p.id
       WHERE o.order_id = $1
-    `, [orderId]);
+    `, [orderId], { isAdmin: true });
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Order not found' });
+      return;
     }
 
     res.json(result.rows[0]);
@@ -221,19 +248,27 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
     // Validate admin_notes length if provided
     if (notes !== undefined && notes !== null && notes.length > 1000) {
       res.status(400).json({ error: 'Admin notes must not exceed 1000 characters' });
+      return;
     }
 
     // Validate status transitions
     const validStatuses = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'];
     if (status && !validStatuses.includes(status)) {
       res.status(400).json({ error: 'Invalid order status' });
+      return;
     }
 
     // Get current order status
-    const currentOrder = await pool.query('SELECT status FROM orders WHERE order_id = $1', [orderId]);
+    const currentOrder = await queryAsUser(
+      req.user!.userId,
+      'SELECT status FROM orders WHERE order_id = $1',
+      [orderId],
+      { isAdmin: true }
+    );
     
     if (currentOrder.rows.length === 0) {
       res.status(404).json({ error: 'Order not found' });
+      return;
     }
 
     const currentStatus = currentOrder.rows[0].status;
@@ -253,6 +288,7 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
         res.status(400).json({ 
           error: `Invalid status transition from ${currentStatus} to ${status}` 
         });
+        return;
       }
     }
 
@@ -272,13 +308,26 @@ router.put('/orders/:orderId/status', async (req: AuthRequest, res: Response): P
 
     if (updates.length === 0) {
       res.status(400).json({ error: 'No fields to update' });
+      return;
     }
 
     updates.push(`updated_at = NOW()`);
     values.push(orderId);
 
     const query = `UPDATE orders SET ${updates.join(', ')} WHERE order_id = $${paramCount} RETURNING *`;
-    const result = await pool.query(query, values);
+    const result = await queryAsUser(req.user!.userId, query, values, { isAdmin: true });
+
+    // Best-effort audit trail (never blocks the response).
+    void logAdminAction(req.user, 'order.status.update', {
+      targetType: 'order',
+      targetId: orderId,
+      metadata: {
+        from: currentStatus,
+        to: status ?? currentStatus,
+        notes_updated: notes !== undefined
+      },
+      ip: req.ip
+    });
 
     res.json(result.rows[0]);
   } catch (error) {

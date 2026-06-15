@@ -1,0 +1,60 @@
+# ============================================================================
+# SaviSanju Collections API — systemd unit
+# ============================================================================
+# Install:
+#   sudo cp deploy/savisanju-api.service /etc/systemd/system/savisanju-api.service
+#   sudo mkdir -p /etc/savisanju
+#   sudo cp deploy/.env.production.example /etc/savisanju/api.env   # then edit secrets
+#   sudo chmod 600 /etc/savisanju/api.env
+#   sudo chown savisanju:savisanju /etc/savisanju/api.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now savisanju-api
+#   sudo systemctl status savisanju-api
+#
+# Assumes a non-root system user `savisanju` and the built app at
+# /opt/savisanju/savisanjucollection-backend (run `npm ci && npm run build` there).
+# ============================================================================
+
+[Unit]
+Description=SaviSanju Collections API (Node/Express)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=savisanju
+Group=savisanju
+
+WorkingDirectory=/opt/savisanju/savisanjucollection-backend
+EnvironmentFile=/etc/savisanju/api.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/server.js
+
+Restart=always
+RestartSec=3
+
+# ── Sandboxing / hardening ──
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# If the app writes uploads to a local path, grant it explicitly, e.g.:
+# ReadWritePaths=/opt/savisanju/public/uploads
+
+# ── Resource limits (tuned for a 1 vCPU / 2 GB box) ──
+MemoryMax=512M
+TasksMax=256
+
+# Log to the journal: journalctl -u savisanju-api -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=savisanju-api
+
+[Install]
+WantedBy=multi-user.target

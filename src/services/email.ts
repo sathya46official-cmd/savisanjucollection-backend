@@ -23,11 +23,11 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 /**
  * Send email verification link to user
  * @param email - User's email address
- * @param userId - User's UUID
+ * @param token - Cryptographically-random, single-use verification token
  */
-export async function sendVerificationEmail(email: string, userId: string): Promise<void> {
+export async function sendVerificationEmail(email: string, token: string): Promise<void> {
   try {
-    const verificationUrl = `${APP_URL}/api/auth/verify-email?token=${userId}`;
+    const verificationUrl = `${APP_URL}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
 
     await getResendClient().emails.send({
       from: FROM_EMAIL,
@@ -108,7 +108,7 @@ export async function sendVerificationEmail(email: string, userId: string): Prom
       `,
     });
 
-    console.log(`✅ Verification email sent to ${email}`);
+    console.log('✅ Verification email sent');
   } catch (error) {
     console.error('❌ Failed to send verification email:', error);
     throw new Error('Failed to send verification email');
@@ -218,7 +218,7 @@ export async function sendOrderConfirmationEmail(email: string, orderId: string)
       `,
     });
 
-    console.log(`✅ Order confirmation email sent to ${email} for order ${orderId}`);
+    console.log(`✅ Order confirmation email sent for order ${orderId}`);
   } catch (error) {
     console.error('❌ Failed to send order confirmation email:', error);
     throw new Error('Failed to send order confirmation email');

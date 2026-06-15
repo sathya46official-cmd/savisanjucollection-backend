@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../config/database';
 import { authenticate, requireAdmin, AuthRequest } from '../middleware/auth';
+import { logAdminAction } from '../utils/audit';
 
 const router = Router();
 
@@ -85,6 +86,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Product not found' });
+      return;
     }
 
     res.json(result.rows[0]);
@@ -101,22 +103,32 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
 
     if (!name) {
       res.status(400).json({ error: 'Product name is required' });
+      return;
     }
 
     // Validate name length
     if (name.length > 255) {
       res.status(400).json({ error: 'Product name must not exceed 255 characters' });
+      return;
     }
 
     // Validate description length
     if (description && description.length > 2000) {
       res.status(400).json({ error: 'Description must not exceed 2000 characters' });
+      return;
     }
 
     const result = await pool.query(
       'INSERT INTO products (name, description, category, featured, display_order) VALUES ($1, $2, $3, $4, $5) RETURNING *',
       [name, description, category, featured || false, display_order || 0]
     );
+
+    void logAdminAction(req.user, 'product.create', {
+      targetType: 'product',
+      targetId: result.rows[0]?.id ?? null,
+      metadata: { name, category },
+      ip: req.ip
+    });
 
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -135,15 +147,18 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
     if (name !== undefined) {
       if (!name || name.trim() === '') {
         res.status(400).json({ error: 'Product name cannot be empty' });
+        return;
       }
       if (name.length > 255) {
         res.status(400).json({ error: 'Product name must not exceed 255 characters' });
+        return;
       }
     }
 
     // Validate description length if provided
     if (description !== undefined && description.length > 2000) {
       res.status(400).json({ error: 'Description must not exceed 2000 characters' });
+      return;
     }
 
     // Build dynamic update query
@@ -174,6 +189,7 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
 
     if (updates.length === 0) {
       res.status(400).json({ error: 'No fields to update' });
+      return;
     }
 
     updates.push(`updated_at = NOW()`);
@@ -184,6 +200,16 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Product not found' });
+      return;
+    }
+
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'product.update', {
+        targetType: 'product',
+        targetId: id,
+        metadata: { fields: updates.filter(u => !u.startsWith('updated_at')) },
+        ip: req.ip
+      });
     }
 
     res.json(result.rows[0]);
@@ -202,6 +228,16 @@ router.delete('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: 
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Product not found' });
+      return;
+    }
+
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'product.delete', {
+        targetType: 'product',
+        targetId: id,
+        metadata: { name: result.rows[0]?.name },
+        ip: req.ip
+      });
     }
 
     res.json({ success: true, message: 'Product deleted successfully' });
@@ -217,28 +253,40 @@ router.post('/:id/variants', authenticate, requireAdmin, async (req: AuthRequest
     const { id } = req.params;
     const { color, size, price, quantity, image_url, is_negotiable, hex_code } = req.body;
 
-    if (!price) {
+    if (price === undefined || price === null) {
       res.status(400).json({ error: 'Price is required' });
+      return;
     }
 
-    // Validate price is positive
-    if (price <= 0) {
-      res.status(400).json({ error: 'Price must be a positive number' });
+    // Price is provided in RUPEES and must be a positive, finite number.
+    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) {
+      res.status(400).json({ error: 'Price must be a positive number (in rupees)' });
+      return;
     }
 
     // Validate hex_code format if provided
     if (hex_code && !/^#[0-9A-Fa-f]{6}$/.test(hex_code)) {
       res.status(400).json({ error: 'Invalid hex code format. Must be #RRGGBB' });
+      return;
     }
 
-    // Convert price from rupees to paise if it's a large number (> 1000)
-    const priceInPaise = price > 1000 ? price : price * 100;
+    // Deterministic conversion: rupees -> paise. The previous `price > 1000`
+    // heuristic mis-stored expensive items at ~1/100th of their value
+    // (massive-discount exploit), so it has been removed.
+    const priceInPaise = Math.round(price * 100);
 
     const result = await pool.query(
       `INSERT INTO product_variants (product_id, color, size, price, quantity, image_url, is_negotiable, hex_code)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [id, color, size, priceInPaise, quantity || 0, image_url, is_negotiable || false, hex_code]
     );
+
+    void logAdminAction(req.user, 'variant.create', {
+      targetType: 'product_variant',
+      targetId: result.rows[0]?.id ?? null,
+      metadata: { product_id: id, color, size, price_paise: priceInPaise },
+      ip: req.ip
+    });
 
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -254,13 +302,15 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
     const { color, size, price, quantity, image_url, is_negotiable, hex_code } = req.body;
 
     // Validate price if provided
-    if (price !== undefined && price <= 0) {
-      res.status(400).json({ error: 'Price must be a positive number' });
+    if (price !== undefined && (typeof price !== 'number' || !Number.isFinite(price) || price <= 0)) {
+      res.status(400).json({ error: 'Price must be a positive number (in rupees)' });
+      return;
     }
 
     // Validate hex_code format if provided
     if (hex_code !== undefined && hex_code && !/^#[0-9A-Fa-f]{6}$/.test(hex_code)) {
       res.status(400).json({ error: 'Invalid hex code format. Must be #RRGGBB' });
+      return;
     }
 
     // Build dynamic update query
@@ -277,7 +327,8 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
       values.push(size);
     }
     if (price !== undefined) {
-      const priceInPaise = price > 1000 ? price : price * 100;
+      // Deterministic rupees -> paise conversion (no ambiguous > 1000 heuristic).
+      const priceInPaise = Math.round(price * 100);
       updates.push(`price = $${paramCount++}`);
       values.push(priceInPaise);
     }
@@ -300,6 +351,7 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
 
     if (updates.length === 0) {
       res.status(400).json({ error: 'No fields to update' });
+      return;
     }
 
     updates.push(`updated_at = NOW()`);
@@ -310,6 +362,16 @@ router.put('/variants/:id', authenticate, requireAdmin, async (req: AuthRequest,
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+      return;
+    }
+
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'variant.update', {
+        targetType: 'product_variant',
+        targetId: id,
+        metadata: { fields: updates.filter(u => !u.startsWith('updated_at')) },
+        ip: req.ip
+      });
     }
 
     res.json(result.rows[0]);
@@ -328,6 +390,16 @@ router.delete('/variants/:id', authenticate, requireAdmin, async (req: AuthReque
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+      return;
+    }
+
+    if (result.rows.length > 0) {
+      void logAdminAction(req.user, 'variant.delete', {
+        targetType: 'product_variant',
+        targetId: id,
+        metadata: { product_id: result.rows[0]?.product_id },
+        ip: req.ip
+      });
     }
 
     res.json({ success: true, message: 'Variant deleted successfully' });
@@ -375,6 +447,7 @@ router.get('/variants/:id', async (req: Request, res: Response): Promise<void> =
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Variant not found' });
+      return;
     }
 
     res.json(result.rows[0]);

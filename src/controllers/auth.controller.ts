@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { randomBytes } from 'crypto';
 import { registerSchema, loginSchema } from '../utils/validation';
 import { hashPassword, verifyPassword } from '../utils/password';
 import { signToken, generateAuthCookie } from '../utils/jwt';
@@ -29,6 +30,9 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     // Hash password with bcrypt
     const passwordHash = await hashPassword(validated.password);
 
+    // Cryptographically-random, single-use email verification token (NOT the user id).
+    const verificationToken = randomBytes(32).toString('hex');
+
     let userId: string = '';
 
     // Create user profile and auth record in transaction
@@ -49,10 +53,17 @@ export const register = async (req: Request, res: Response): Promise<void> => {
          VALUES ($1, $2)`,
         [userId, passwordHash]
       );
+
+      // Store the verification token with a 24h expiry (random token, not the user id)
+      await client.query(
+        `INSERT INTO email_verification_tokens (user_id, token, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
+        [userId, verificationToken]
+      );
     });
 
-    // Send verification email
-    await sendVerificationEmail(validated.email, userId!);
+    // Send verification email with the random token
+    await sendVerificationEmail(validated.email, verificationToken);
 
     res.status(201).json({
       message: 'Registration successful. Please check your email to verify your account.'
@@ -93,7 +104,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     // Find user by email
     const userResult = await query(
-      `SELECT up.id, up.email, up.name, ua.password_hash
+      `SELECT up.id, up.email, up.name, up.role, up.email_verified, ua.password_hash
        FROM user_profiles up
        INNER JOIN user_auth ua ON up.id = ua.user_id
        WHERE up.email = $1`,
@@ -116,11 +127,22 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Generate JWT token
+    // Enforce email verification AFTER a valid password, so we never reveal a
+    // mailbox's verification status to anonymous/unauthenticated callers.
+    if (!user.email_verified) {
+      res.status(403).json({
+        error: 'Please verify your email before logging in.',
+        code: 'EMAIL_NOT_VERIFIED'
+      });
+      return;
+    }
+
+    // Generate JWT token. Role is derived strictly from the trusted DB column,
+    // never from the request or an email comparison.
     const token = signToken({
       userId: user.id,
       email: user.email,
-      role: 'user'
+      role: user.role === 'admin' ? 'admin' : 'user'
     });
 
     // Set httpOnly cookie
@@ -217,11 +239,16 @@ export const adminLogin = async (req: Request, res: Response): Promise<void> => 
 
     const user = userResult.rows[0];
 
-    // Check if user has admin role (via env var or DB role column)
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@savisanju.com';
-    const isAdmin = user.email === adminEmail || user.role === 'admin';
+    // Authorization is based ONLY on the trusted `role` column in the database.
+    // We intentionally do NOT grant admin based on a matching email address,
+    // because the admin email is a guessable/configurable value and email-based
+    // checks enabled an admin-account-takeover path.
+    const isAdmin = user.role === 'admin';
     if (!isAdmin) {
-      res.status(403).json({ error: 'Admin access required' });
+      // Verify the password before responding so the error/timing is identical
+      // whether or not the account is an admin (avoids admin-account enumeration).
+      await verifyPassword(validated.password, user.password_hash);
+      res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 
@@ -270,5 +297,61 @@ export const adminLogin = async (req: Request, res: Response): Promise<void> => 
     // Server errors
     console.error('Admin login error:', error);
     res.status(500).json({ error: 'Login failed. Please try again later.' });
+  }
+};
+
+/**
+ * POST /api/auth/resend-verification
+ * Re-issue an email verification link.
+ *
+ * Always responds with an identical generic 200 regardless of whether the email
+ * exists or is already verified, to avoid account/verification-state enumeration.
+ */
+export const resendVerification = async (req: Request, res: Response): Promise<void> => {
+  const generic = {
+    success: true,
+    message: 'If that email exists and is unverified, a verification link has been sent.'
+  };
+
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+
+    // Basic shape check only; never reveal validation specifics here.
+    if (!email || !email.includes('@')) {
+      res.status(200).json(generic);
+      return;
+    }
+
+    const userResult = await query(
+      `SELECT id, email_verified FROM user_profiles WHERE email = $1`,
+      [email]
+    );
+
+    // Only send when the account exists AND is still unverified.
+    if (userResult.rows.length > 0 && !userResult.rows[0].email_verified) {
+      const userId = userResult.rows[0].id;
+      const verificationToken = randomBytes(32).toString('hex');
+
+      await transaction(async (client) => {
+        // Invalidate any previously issued tokens for this user.
+        await client.query(
+          `DELETE FROM email_verification_tokens WHERE user_id = $1`,
+          [userId]
+        );
+        await client.query(
+          `INSERT INTO email_verification_tokens (user_id, token, expires_at)
+           VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
+          [userId, verificationToken]
+        );
+      });
+
+      await sendVerificationEmail(email, verificationToken);
+    }
+
+    res.status(200).json(generic);
+  } catch (error) {
+    // Even on error, do not leak whether the email exists. Log server-side only.
+    console.error('Resend verification error:', error);
+    res.status(200).json(generic);
   }
 };

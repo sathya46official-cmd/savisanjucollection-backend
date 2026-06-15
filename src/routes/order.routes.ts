@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import pool from '../config/database';
+import pool, { queryAsUser } from '../config/database';
 import { randomBytes } from 'crypto';
 import { authenticate, AuthRequest } from '../middleware/auth';
 
@@ -12,48 +12,87 @@ function generateOrderId(): string {
 
 // Create order (requires authentication)
 router.post('/create', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
+  // Normalize quantity up-front and validate it is a positive integer.
+  const {
+    variant_id,
+    quantity = 1,
+    address_line1,
+    address_line2,
+    city,
+    state,
+    postal_code,
+    country = 'India',
+    phone,
+  } = req.body;
+
+  // Validation (each branch returns so execution cannot fall through)
+  if (!variant_id || !address_line1 || !city || !state || !postal_code || !phone) {
+    res.status(400).json({
+      error: 'Missing required fields: variant_id, address_line1, city, state, postal_code, phone'
+    });
+    return;
+  }
+
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    res.status(400).json({ error: 'quantity must be a positive integer' });
+    return;
+  }
+
+  const userId = req.user!.userId;
+  const orderId = generateOrderId();
+
+  // Use a single transaction with a row-level lock so the stock check and the
+  // decrement are atomic. Without this, two concurrent orders could both read
+  // the same stock value, both pass the check, and oversell inventory
+  // (the "unlimited inventory" race condition).
+  const client = await pool.connect();
   try {
-    const {
-      variant_id,
-      quantity = 1,
-      address_line1,
-      address_line2,
-      city,
-      state,
-      postal_code,
-      country = 'India',
-      phone,
-    } = req.body;
+    await client.query('BEGIN');
 
-    // Validation
-    if (!variant_id || !address_line1 || !city || !state || !postal_code || !phone) {
-      res.status(400).json({ 
-        error: 'Missing required fields: variant_id, address_line1, city, state, postal_code, phone' 
-      });
-    }
+    // Set the RLS context for this transaction (see migration 009) so the
+    // orders INSERT satisfies the ownership policy when running under the
+    // least-privilege DB role.
+    await client.query("SELECT set_config('app.current_user_id', $1, true)", [userId]);
 
-    // Get variant details to get price
-    const variantResult = await pool.query(
-      'SELECT price, quantity as stock FROM product_variants WHERE id = $1',
+    // Lock the variant row FOR UPDATE; concurrent orders for the same variant
+    // will serialize here until this transaction commits/rolls back.
+    const variantResult = await client.query(
+      'SELECT price, quantity AS stock FROM product_variants WHERE id = $1 FOR UPDATE',
       [variant_id]
     );
 
     if (variantResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       res.status(404).json({ error: 'Product variant not found' });
+      return;
     }
 
     const variant = variantResult.rows[0];
 
-    // Check stock
     if (variant.stock < quantity) {
+      await client.query('ROLLBACK');
       res.status(400).json({ error: 'Insufficient stock' });
+      return;
     }
 
-    const orderId = generateOrderId();
-    const userId = req.user!.userId; // Get authenticated user ID
+    // Atomically decrement stock. The WHERE guard (quantity >= $2) is a second
+    // line of defense in addition to the row lock and the CHECK(quantity >= 0).
+    const decrementResult = await client.query(
+      `UPDATE product_variants
+       SET quantity = quantity - $2, updated_at = NOW()
+       WHERE id = $1 AND quantity >= $2
+       RETURNING quantity`,
+      [variant_id, quantity]
+    );
 
-    // Create order
-    const result = await pool.query(
+    if (decrementResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      res.status(400).json({ error: 'Insufficient stock' });
+      return;
+    }
+
+    // Create the order using the server-side price (never trust a client price).
+    const result = await client.query(
       `INSERT INTO orders (
         order_id, user_id, variant_id, quantity, price,
         address_line1, address_line2, city, state, postal_code, country, phone,
@@ -77,14 +116,19 @@ router.post('/create', authenticate, async (req: AuthRequest, res: Response): Pr
       ]
     );
 
+    await client.query('COMMIT');
+
     res.status(201).json({
       success: true,
       order: result.rows[0],
       message: 'Order placed successfully'
     });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
     console.error('Error creating order:', error);
     res.status(500).json({ error: 'Failed to create order' });
+  } finally {
+    client.release();
   }
 });
 
@@ -93,7 +137,8 @@ router.get('/history', authenticate, async (req: AuthRequest, res: Response): Pr
   try {
     const userId = req.user!.userId;
 
-    const result = await pool.query(
+    const result = await queryAsUser(
+      userId,
       `SELECT 
         o.*,
         pv.color as color_name, pv.image_url as product_image,
@@ -120,7 +165,8 @@ router.put('/:id/cancel', authenticate, async (req: AuthRequest, res: Response):
     const userId = req.user!.userId;
 
     // Check if order belongs to user
-    const orderCheck = await pool.query(
+    const orderCheck = await queryAsUser(
+      userId,
       'SELECT * FROM orders WHERE id = $1 AND user_id = $2',
       [id, userId]
     );
@@ -141,7 +187,8 @@ router.put('/:id/cancel', authenticate, async (req: AuthRequest, res: Response):
     }
 
     // Update order status
-    const result = await pool.query(
+    const result = await queryAsUser(
+      userId,
       'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
       ['cancelled', id]
     );
