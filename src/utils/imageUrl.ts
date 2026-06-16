@@ -1,20 +1,26 @@
 const API_URL = process.env.API_URL || 'http://localhost:5000';
 
+function resolveSingleUrl(url: string): string {
+  if (url.startsWith('http')) return url;
+  return `${API_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
 export function resolveImageUrl(url: string | null | undefined): string | null {
   if (!url) return url ?? null;
-  if (url.startsWith('http')) return url;
 
-  // image_url is sometimes stored as a JSON-stringified array
+  // image_url is stored as a JSON-stringified array: '["/uploads/products/..."]'
   if (url.startsWith('[')) {
     try {
       const parsed = JSON.parse(url) as (string | null)[];
-      return JSON.stringify(parsed.map((u) => (u ? resolveImageUrl(u) : u)));
+      const resolved = parsed.map((u) => (u ? resolveSingleUrl(u) : null)).filter(Boolean);
+      return resolved[0] ?? null;
     } catch {
-      // fall through to single URL handling
+      // fall through
     }
   }
 
-  return `${API_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+  if (url.startsWith('http')) return url;
+  return resolveSingleUrl(url);
 }
 
 export function resolveVariantUrls(variant: any): any {
