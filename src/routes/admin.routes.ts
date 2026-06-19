@@ -17,7 +17,9 @@ router.use(requireAdmin);
 // Configure multer for image uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(process.cwd(), '..', 'public', 'uploads', 'products');
+    // Store uploads under the project root's public/uploads/products
+    // (__dirname is dist/routes in production and src/routes during ts-node dev; .. brings us to the project root)
+    const uploadDir = path.join(__dirname, '..', '..', 'public', 'uploads', 'products');
     
     // Create directory if it doesn't exist
     if (!fs.existsSync(uploadDir)) {

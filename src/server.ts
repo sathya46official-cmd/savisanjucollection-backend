@@ -108,8 +108,9 @@ app.get('/health', (req, res) => {
 // Stricter per-endpoint limits (e.g. auth) are layered on top in their routers.
 app.use('/api', rateLimiter);
 
-// Serve uploaded images as static files
-app.use('/uploads', express.static(path.join(process.cwd(), '..', 'public', 'uploads')));
+// Serve uploaded images as static files from the project root's public/uploads
+// (__dirname is dist/ in production and src/ during ts-node dev; .. brings us to the project root)
+app.use('/uploads', express.static(path.join(__dirname, '..', 'public', 'uploads')));
 
 // API routes
 app.use('/api/auth', authRoutes);
