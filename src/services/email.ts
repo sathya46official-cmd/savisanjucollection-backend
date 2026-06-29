@@ -26,9 +26,24 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
  * @param token - Cryptographically-random, single-use verification token
  */
 export async function sendVerificationEmail(email: string, token: string): Promise<void> {
-  try {
-    const verificationUrl = `${APP_URL}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
+  const verificationUrl = `${APP_URL}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
 
+  // Guard rail: a missing API key is the #1 reason verification emails never
+  // arrive. Make the cause obvious instead of failing with an opaque error.
+  if (!process.env.RESEND_API_KEY) {
+    console.warn(
+      "⚠️  RESEND_API_KEY is not set — verification email cannot be sent. " +
+        "Set RESEND_API_KEY (and a verified RESEND_FROM_EMAIL domain) in the backend environment."
+    );
+    if (process.env.NODE_ENV !== "production") {
+      // In development, print the link so you can verify without email.
+      console.log(`🔗 Dev verification link for ${email}: ${verificationUrl}`);
+      return;
+    }
+    throw new Error("Email service not configured (missing RESEND_API_KEY)");
+  }
+
+  try {
     await getResendClient().emails.send({
       from: FROM_EMAIL,
       to: email,

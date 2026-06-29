@@ -62,11 +62,32 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       );
     });
 
-    // Send verification email with the random token
-    await sendVerificationEmail(validated.email, verificationToken);
+    // Send verification email with the random token.
+    //
+    // The account is ALREADY committed above. If email delivery is
+    // misconfigured (e.g. RESEND_API_KEY missing, or the sending domain is not
+    // verified in Resend), we must NOT return a 500 here — that would leave the
+    // user with an account they can neither verify nor re-register (the email
+    // is now taken). Instead we log the failure (and, outside production, the
+    // verification link) and still report success. The user can use
+    // "Resend verification" once email is configured.
+    let emailSent = true;
+    try {
+      await sendVerificationEmail(validated.email, verificationToken);
+    } catch (mailError) {
+      emailSent = false;
+      console.error('⚠️ Verification email failed (account was still created):', mailError);
+      if (process.env.NODE_ENV !== 'production') {
+        const base = process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
+        console.log(`🔗 Manual verification link for ${validated.email}: ${base}/api/auth/verify-email?token=${verificationToken}`);
+      }
+    }
 
     res.status(201).json({
-      message: 'Registration successful. Please check your email to verify your account.'
+      message: emailSent
+        ? 'Registration successful. Please check your email (including spam) to verify your account.'
+        : 'Registration successful, but we could not send the verification email right now. Please use “Resend verification” shortly.',
+      emailSent
     });
   } catch (error) {
     // Handle Zod validation errors
